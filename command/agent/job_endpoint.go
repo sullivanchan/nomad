@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/golang/snappy"
+	multierror "github.com/hashicorp/go-multierror"
+	"github.com/hashicorp/nomad/api"
 	"github.com/hashicorp/nomad/nomad/structs"
 )
 
@@ -108,6 +110,48 @@ func (s *HTTPServer) jobPlan(resp http.ResponseWriter, req *http.Request,
 		return nil, err
 	}
 	setIndex(resp, out.Index)
+	return out, nil
+}
+
+func (s *HTTPServer) ValidateJobRequest(resp http.ResponseWriter, req *http.Request) (interface{}, error) {
+	// Ensure request method is POST or PUT
+	if !(req.Method == "POST" || req.Method == "PUT") {
+		return nil, CodedError(405, ErrInvalidMethod)
+	}
+
+	var validateRequest api.JobValidateRequest
+	if err := decodeBody(req, &validateRequest); err != nil {
+		return nil, CodedError(400, err.Error())
+	}
+	if validateRequest.Job == nil {
+		return nil, CodedError(400, "Job must be specified")
+	}
+
+	job := s.apiJobToStructJob(validateRequest.Job)
+	args := structs.JobValidateRequest{
+		Job: job,
+		WriteRequest: structs.WriteRequest{
+			Region: validateRequest.Region,
+		},
+	}
+	s.parseRegion(req, &args.Region)
+
+	var out structs.JobValidateResponse
+	if err := s.agent.RPC("Job.Validate", &args, &out); err != nil {
+
+		// Fall back to do local validation
+		args.Job.Canonicalize()
+		if vErr := args.Job.Validate(); vErr != nil {
+			if merr, ok := err.(*multierror.Error); ok {
+				for _, err := range merr.Errors {
+					out.ValidationErrors = append(out.ValidationErrors, err.Error())
+				}
+			}
+		} else {
+			out.ValidationErrors = append(out.ValidationErrors, vErr.Error())
+		}
+	}
+
 	return out, nil
 }
 
@@ -309,4 +353,59 @@ func (s *HTTPServer) jobDispatchRequest(resp http.ResponseWriter, req *http.Requ
 	}
 	setIndex(resp, out.Index)
 	return out, nil
+}
+
+func (s *HTTPServer) apiJobToStructJob(job *api.Job) *structs.Job {
+	job.Canonicalize()
+
+	j := &structs.Job{
+		Region:            *job.Region,
+		ID:                *job.ID,
+		ParentID:          *job.ID,
+		Name:              *job.Name,
+		Type:              *job.Type,
+		Priority:          *job.Priority,
+		AllAtOnce:         *job.AllAtOnce,
+		Datacenters:       job.Datacenters,
+		Payload:           job.Payload,
+		Meta:              job.Meta,
+		VaultToken:        *job.VaultToken,
+		Status:            *job.Status,
+		StatusDescription: *job.StatusDescription,
+		CreateIndex:       *job.CreateIndex,
+		ModifyIndex:       *job.ModifyIndex,
+		JobModifyIndex:    *job.ModifyIndex,
+	}
+
+	j.Constraints = make([]*structs.Constraint, len(job.Constraints))
+	for i, c := range job.Constraints {
+		j.Constraints[i] = &structs.Constraint{
+			LTarget: c.LTarget,
+			RTarget: c.RTarget,
+			Operand: c.Operand,
+		}
+	}
+	if job.Update != nil {
+		j.Update = structs.UpdateStrategy{
+			Stagger:     job.Update.Stagger,
+			MaxParallel: job.Update.MaxParallel,
+		}
+	}
+	if job.Periodic != nil {
+		j.Periodic = &structs.PeriodicConfig{
+			Enabled:         j.Periodic.Enabled,
+			Spec:            j.Periodic.Spec,
+			SpecType:        j.Periodic.SpecType,
+			ProhibitOverlap: j.Periodic.ProhibitOverlap,
+		}
+	}
+	if job.ParameterizedJob != nil {
+		j.ParameterizedJob = &structs.ParameterizedJobConfig{
+			Payload:      job.ParameterizedJob.Payload,
+			MetaRequired: job.ParameterizedJob.MetaRequired,
+			MetaOptional: job.ParameterizedJob.MetaOptional,
+		}
+	}
+
+	return j
 }
