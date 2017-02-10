@@ -280,6 +280,8 @@ func (c *AllocStatusCommand) outputTaskStatus(state *api.TaskState) {
 		// Build up the description based on the event type.
 		var desc string
 		switch event.Type {
+		case api.TaskSetup:
+			desc = event.Message
 		case api.TaskStarted:
 			desc = "Task started by client"
 		case api.TaskReceived:
@@ -382,6 +384,7 @@ func (c *AllocStatusCommand) outputTaskStatus(state *api.TaskState) {
 			}
 		case api.TaskDriverMessage:
 			desc = event.DriverMessage
+
 		}
 
 		// Reverse order so we are sorted by time
