@@ -19,7 +19,7 @@ force-killing it.
 
 Before Nomad terminates an application, it will send the `SIGINT` signal to the
 process. Processes running under Nomad should respond to this signal to
-gracefully drain connections. After a configurable timeout, the application wil
+gracefully drain connections. After a configurable timeout, the application will
 be force-terminated.
 
 ```hcl
